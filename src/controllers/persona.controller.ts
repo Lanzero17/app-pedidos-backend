@@ -1,3 +1,4 @@
+import {service} from '@loopback/core';
 import {
   Count,
   CountSchema,
@@ -16,15 +17,112 @@ import {
   del,
   requestBody,
   response,
+  HttpErrors,
 } from '@loopback/rest';
-import {Persona} from '../models';
+import {request} from 'http';
+
+import {Llaves} from '../config/llaves';
+import {CambiarClave, Credenciales, Persona} from '../models';
 import {PersonaRepository} from '../repositories';
+import {AutenticacionService} from '../services';
+const fetch = require('node-fetch');
 
 export class PersonaController {
   constructor(
     @repository(PersonaRepository)
-    public personaRepository : PersonaRepository,
-  ) {}
+    public personaRepository: PersonaRepository,
+    @service(AutenticacionService)
+    public servicioAutentication: AutenticacionService
+  ) { }
+
+  @post("/identificacionPersona", {
+    responses: {
+      '200': {
+        descripcion: "Identificacion de usuarios"
+      }
+    }
+  })
+  async identificarPersona(
+    @requestBody() credenciales: Credenciales
+  ) {
+    let p = await this.servicioAutentication.IdentificarPersona(credenciales.usuario, credenciales.clave);
+    if (p) {
+      let token = this.servicioAutentication.GenerarTokenJWT(p);
+      return {
+        datos: {
+          nombre: p.nombres,
+          correo: p.correo,
+          id: p.id
+        },
+        tk: token
+      }
+
+    } else {
+      throw new HttpErrors[401]("datos invalidos");
+
+    }
+  }
+
+/*
+    @post('/personas')
+    @response(200, {
+      description: 'Persona model instance',
+      content: {'application/json': {schema: getModelSchemaRef(Persona)}},
+    })
+    async create(
+      @requestBody({
+        content: {
+          'application/json': {
+            schema: getModelSchemaRef(Persona, {
+              title: 'NewPersona',
+              exclude: ['id'],
+            }),
+          },
+        },
+      })
+      persona: Omit<Persona, 'id'>,
+    ): Promise<Persona> {
+      return this.personaRepository.create(persona);
+    }
+*/
+
+  @post('/cambiarclave')
+  @response(200, {
+    description: 'Cambio de clave de usuarios',
+    content: {'application/json': {schema: getModelSchemaRef(CambiarClave)}},
+  })
+  async cambiarClave(
+    @requestBody({
+      content: {
+        'application/json': {
+          schema: getModelSchemaRef(CambiarClave, {
+            title: 'Cambio de clave del usuario',
+          }),
+        },
+      },
+    })
+    credencialesClave: CambiarClave,
+  ): Promise<object | null> {
+    let usuario = await this.personaRepository.findOne({
+      where: {
+        _id: credencialesClave.id_usuario,
+        clave: credencialesClave.clave_actual
+      }
+    });
+    if (usuario) {
+      usuario.clave = credencialesClave.nueva_clave;
+      await this.personaRepository.updateById(credencialesClave.id_usuario, usuario);
+    }
+    return usuario;
+  }
+
+/*
+  @post('/mensaje')
+  @response(200, {
+    description: 'Mensaje model instance',
+    content: {'application/json': {schema: getModelSchemaRef(Persona)}},
+  })
+*/
 
   @post('/personas')
   @response(200, {
@@ -44,7 +142,19 @@ export class PersonaController {
     })
     persona: Omit<Persona, 'id'>,
   ): Promise<Persona> {
-    return this.personaRepository.create(persona);
+    let clave = this.servicioAutentication.GenerarClave();
+    let claveCifrada = this.servicioAutentication.CifrarClave(clave);
+    persona.clave = claveCifrada;
+    let p = await this.personaRepository.create(persona);
+    // Notificar al usuario
+    let destino = persona.correo;
+    let asunto = 'Registro en la plataforma';
+    let contenido = `Hola ${persona.nombres}, su nombre de usuario es ${persona.correo} y su contraseña es: ${clave}`;
+    fetch(`${Llaves.urlServicioNotificaciones}/envio-correo?correo_destino=${destino}&asunto=${asunto}&contenido=${contenido}`)
+      .then((data: any) => {
+        console.log(data);
+      })
+    return p;
   }
 
   @get('/personas/count')
